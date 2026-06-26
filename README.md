@@ -23,7 +23,7 @@ The collector reads XML audit files from a shared audit directory. Oracle writes
 ## Repository Layout
 
 ```text
-oracle21c_xml_audit_collector/
+oracle-audit-logger/
 ├── README.md
 ├── docker-compose.yml
 ├── Dockerfile
@@ -95,7 +95,7 @@ cd <REPOSITORY_DIRECTORY>
 If this project is inside a larger repository, enter the Oracle collector directory:
 
 ```bash
-cd oracle21c_xml_audit_collector
+cd oracle-audit-logger
 ```
 
 ## Project Directories
