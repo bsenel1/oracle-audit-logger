@@ -1,0 +1,18 @@
+# Rust build output
+target/
+
+# Oracle database files
+oracle21c-data/*
+!oracle21c-data/.gitkeep
+
+# Oracle XML audit files
+oracle21c-audit/*
+!oracle21c-audit/.gitkeep
+
+# Collector offsets
+offsets/*
+!offsets/.gitkeep
+
+# Environment and logs
+.env
+*.log

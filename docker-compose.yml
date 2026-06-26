@@ -1,0 +1,25 @@
+services:
+  oracle21c-db:
+    image: gvenzl/oracle-xe:21-slim
+    container_name: oracle21c-db
+    restart: unless-stopped
+    ports:
+      - "1522:1521"
+    shm_size: "1g"
+    environment:
+      ORACLE_PASSWORD: "<ORACLE_SYS_PASSWORD>"
+    volumes:
+      - ./oracle21c-data:/opt/oracle/oradata
+      - ./oracle21c-audit:/opt/oracle/audit
+
+  oracle21c-audit-file-collector:
+    build: .
+    container_name: oracle21c-audit-file-collector
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      POSTGRES_DB_URL: "postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@<POSTGRES_HOST>:<POSTGRES_PORT>/<POSTGRES_DATABASE>"
+    volumes:
+      - ./config.toml:/app/config.toml:ro
+      - ./offsets:/app/offsets
+      - ./oracle21c-audit:/oracle-audit:ro

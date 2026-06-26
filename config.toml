@@ -1,0 +1,9 @@
+[collector]
+poll_interval_secs = 5
+sincedb_dir = "/app/offsets"
+
+[[oracle_file_sources]]
+cluster_name = "<CLUSTER_NAME>"
+server_name = "oracle21c-db"
+server_ip = "<ORACLE_SERVER_IP>"
+audit_file_path = "/oracle-audit/**/*.xml"

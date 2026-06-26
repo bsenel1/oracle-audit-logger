@@ -1,78 +1,122 @@
 # Oracle 21c XML Audit File Collector
 
-This project collects Oracle 21c XML audit files, parses Oracle audit records, separates connection events from SQL audit events, and writes the parsed data into PostgreSQL tables.
+Oracle 21c XML Audit File Collector reads Oracle 21c XML audit files and exports parsed audit records into PostgreSQL tables.
 
-Oracle 21c is the target version for this collector. The project is designed for Oracle 21c with `audit_trail = XML, EXTENDED` because this mode produces file-based XML audit records that can be collected without connecting directly to the Oracle database from the collector.
+The project is designed around Oracle Database 21c with `audit_trail = XML, EXTENDED`. Oracle 21c is used because file-based XML extended audit records can be generated and processed reliably.
 
 ## Architecture
 
 ```text
-Oracle 21c
-  -> XML EXTENDED audit files
-  -> Oracle XML Audit File Collector
-  -> PostgreSQL
-       -> oracle_connection_logs
-       -> oracle_audit_logs
+Oracle 21c Container
+        ↓
+XML EXTENDED Audit Files
+        ↓
+Rust Audit File Collector
+        ↓
+PostgreSQL Target Database
+        ├── oracle_connection_logs
+        └── oracle_audit_logs
 ```
+
+The collector reads XML audit files from a shared audit directory. Oracle writes audit files into the host directory `oracle21c-audit/`, and the collector reads the same directory as read-only.
+
+## Repository Layout
+
+```text
+oracle21c_xml_audit_collector/
+├── README.md
+├── docker-compose.yml
+├── Dockerfile
+├── Cargo.toml
+├── config.toml
+├── .gitignore
+│
+├── src/
+│   └── main.rs
+│
+├── offsets/
+│   └── .gitkeep
+│
+├── oracle21c-data/
+│   └── .gitkeep
+│
+└── oracle21c-audit/
+    └── .gitkeep
+```
+
+## Directory Purpose
+
+| Path | Purpose |
+|---|---|
+| `docker-compose.yml` | Starts Oracle 21c and the audit collector |
+| `Dockerfile` | Builds the Rust collector container |
+| `Cargo.toml` | Rust package and dependency configuration |
+| `config.toml` | Collector source and runtime configuration |
+| `src/main.rs` | Main collector implementation |
+| `offsets/` | Stores processed file offsets |
+| `oracle21c-data/` | Stores Oracle database files on the host |
+| `oracle21c-audit/` | Stores Oracle XML audit files on the host |
+
+Real Oracle data files, XML audit files, and offset files should not be committed to Git.
 
 ## Features
 
-- Reads Oracle 21c XML audit files.
-- Supports `audit_trail = XML, EXTENDED`.
-- Supports one or more Oracle audit file sources.
+- Reads Oracle 21c XML audit files
+- Supports `audit_trail = XML, EXTENDED`
+- Supports one or more Oracle audit file sources
 - Adds source metadata to every record:
   - `cluster_name`
   - `server_name`
   - `server_ip`
-- Separates connection events and SQL audit events.
-- Writes connection events to `oracle_connection_logs`.
-- Writes SQL audit events to `oracle_audit_logs`.
-- Stores file offsets under the configured `sincedb_dir`.
-- Prevents duplicate inserts with `ON CONFLICT DO NOTHING` when the required unique indexes exist.
-- Filters common Oracle and DBeaver metadata queries.
-- Supports Docker-based deployment.
+- Separates connection events and SQL audit events
+- Writes connection events into `oracle_connection_logs`
+- Writes SQL audit events into `oracle_audit_logs`
+- Uses offset files to avoid reprocessing already-read XML files
+- Uses PostgreSQL `ON CONFLICT DO NOTHING` to reduce duplicate inserts
+- Filters common Oracle and DBeaver metadata noise
+- Runs with Docker Compose
 
-## Repository Structure
-
-```text
-.
-├── docker-compose.yml
-├── oracle21c-audit/
-└── oracle_audit_file_collector/
-    ├── Cargo.toml
-    ├── Dockerfile
-    ├── config.toml
-    ├── offsets/
-    └── src/
-        └── main.rs
-```
-
-The repository already contains the required files. Users should not create these files from scratch. They only need to edit the placeholder values in the existing files.
-
-## Required Components
+## Requirements
 
 - Docker
 - Docker Compose
 - PostgreSQL target database
-- Oracle Database 21c XE
-- Rust only if running the collector without Docker
+- Git
 
-## Configuration Files
+The PostgreSQL database can run on the host, another container, or a remote server. The collector only needs a valid PostgreSQL connection string.
 
-The main files that usually need environment-specific changes are:
+## Clone the Repository
 
-```text
-config.toml
-docker-compose.yml
+```bash
+git clone <REPOSITORY_URL>
+cd <REPOSITORY_DIRECTORY>
 ```
 
-Use placeholder values such as `<POSTGRES_USER>` and `<ORACLE_SYS_PASSWORD>` in committed examples. Do not commit real credentials, IP addresses, or passwords.
+If this project is inside a larger repository, enter the Oracle collector directory:
 
-## config.toml
+```bash
+cd oracle21c_xml_audit_collector
+```
 
-The repository includes `oracle_audit_file_collector/config.toml`.
+## Project Directories
 
-Default template:
+The repository already includes the required directories with `.gitkeep` files. If they are missing in your environment, create them with:
+
+```bash
+mkdir -p oracle21c-data oracle21c-audit offsets
+```
+
+For local test environments, if Oracle cannot write to the bind-mounted directories, adjust permissions:
+
+```bash
+chmod -R 777 oracle21c-data oracle21c-audit offsets
+```
+
+For production environments, prefer using the correct container user/group ownership instead of broad permissions.
+
+## Configuration
+
+The repository already includes `config.toml`. Update it for your own environment.
 
 ```toml
 [collector]
@@ -81,7 +125,7 @@ sincedb_dir = "/app/offsets"
 
 [[oracle_file_sources]]
 cluster_name = "<CLUSTER_NAME>"
-server_name = "<ORACLE_SERVER_NAME>"
+server_name = "oracle21c-db"
 server_ip = "<ORACLE_SERVER_IP>"
 audit_file_path = "/oracle-audit/**/*.xml"
 ```
@@ -90,44 +134,30 @@ audit_file_path = "/oracle-audit/**/*.xml"
 
 | Field | Description |
 |---|---|
-| `poll_interval_secs` | How often the collector scans XML audit files. |
-| `sincedb_dir` | Directory where offset files are stored inside the collector container. |
-| `cluster_name` | Logical cluster or environment name. |
-| `server_name` | Oracle source server name. |
-| `server_ip` | Oracle source server IP address. |
-| `audit_file_path` | Glob pattern for XML audit files as seen from inside the collector container. |
+| `poll_interval_secs` | How often the collector scans XML audit files |
+| `sincedb_dir` | Offset directory inside the collector container |
+| `cluster_name` | Logical environment or cluster name |
+| `server_name` | Oracle source server name |
+| `server_ip` | Oracle source server IP address |
+| `audit_file_path` | XML audit file glob path inside the collector container |
 
-Example source configuration:
+The default collector container sees Oracle audit files at:
 
-```toml
-[[oracle_file_sources]]
-cluster_name = "<PRODUCTION_CLUSTER>"
-server_name = "<ORACLE_SERVER_01>"
-server_ip = "<ORACLE_SERVER_IP>"
-audit_file_path = "/oracle-audit/**/*.xml"
+```text
+/oracle-audit/**/*.xml
 ```
 
-For multiple Oracle sources, add another `[[oracle_file_sources]]` block:
+This path comes from the Docker Compose volume:
 
-```toml
-[[oracle_file_sources]]
-cluster_name = "<CLUSTER_NAME_1>"
-server_name = "<ORACLE_SERVER_NAME_1>"
-server_ip = "<ORACLE_SERVER_IP_1>"
-audit_file_path = "/oracle-audit/server-1/**/*.xml"
-
-[[oracle_file_sources]]
-cluster_name = "<CLUSTER_NAME_2>"
-server_name = "<ORACLE_SERVER_NAME_2>"
-server_ip = "<ORACLE_SERVER_IP_2>"
-audit_file_path = "/oracle-audit/server-2/**/*.xml"
+```yaml
+- ./oracle21c-audit:/oracle-audit:ro
 ```
 
-## docker-compose.yml
+## Docker Compose Configuration
 
-The repository includes `docker-compose.yml` at the repository root.
+The repository already includes `docker-compose.yml`. Update only environment-specific values such as passwords, ports, and PostgreSQL connection details.
 
-Default template:
+Default structure:
 
 ```yaml
 services:
@@ -136,79 +166,58 @@ services:
     container_name: oracle21c-db
     restart: unless-stopped
     ports:
-      - "<HOST_ORACLE_PORT>:1521"
+      - "1522:1521"
     shm_size: "1g"
     environment:
       ORACLE_PASSWORD: "<ORACLE_SYS_PASSWORD>"
     volumes:
-      - oracle21c_data:/opt/oracle/oradata
-      - ./oracle21c-audit:<ORACLE_AUDIT_DIRECTORY_IN_ORACLE_CONTAINER>
+      - ./oracle21c-data:/opt/oracle/oradata
+      - ./oracle21c-audit:/opt/oracle/audit
 
   oracle21c-audit-file-collector:
-    build: ./oracle_audit_file_collector
-    container_name: oracle21c-audit-logger
+    build: .
+    container_name: oracle21c-audit-file-collector
     restart: unless-stopped
     network_mode: host
     environment:
       POSTGRES_DB_URL: "postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@<POSTGRES_HOST>:<POSTGRES_PORT>/<POSTGRES_DATABASE>"
     volumes:
-      - ./oracle_audit_file_collector/config.toml:/app/config.toml:ro
-      - ./oracle_audit_file_collector/offsets:/app/offsets
+      - ./config.toml:/app/config.toml:ro
+      - ./offsets:/app/offsets
       - ./oracle21c-audit:/oracle-audit:ro
-
-volumes:
-  oracle21c_data:
 ```
 
 ### Important Volume Mapping
 
-Oracle writes XML audit files into this container path:
-
-```text
-<ORACLE_AUDIT_DIRECTORY_IN_ORACLE_CONTAINER>
-```
-
-The host stores those files in:
-
-```text
-./oracle21c-audit
-```
-
-The collector reads the same host directory through this path:
-
-```text
-/oracle-audit
-```
-
-Therefore, the default `config.toml` audit pattern should usually remain:
-
-```toml
-audit_file_path = "/oracle-audit/**/*.xml"
-```
-
-A common Oracle audit directory example is:
+Oracle writes XML audit files to this path inside the Oracle container:
 
 ```text
 /opt/oracle/audit
 ```
 
-In that case, the Compose volume can be:
+That path is mounted to the host directory:
 
-```yaml
-- ./oracle21c-audit:/opt/oracle/audit
+```text
+./oracle21c-audit
 ```
 
-and the collector volume remains:
+The collector reads the same host directory as:
 
-```yaml
-- ./oracle21c-audit:/oracle-audit:ro
+```text
+/oracle-audit
+```
+
+Therefore, the collector config should use:
+
+```toml
+audit_file_path = "/oracle-audit/**/*.xml"
 ```
 
 ## PostgreSQL Target Tables
 
-Create the PostgreSQL target tables before starting the collector.
+Create the target tables before starting the collector.
 
-### oracle_connection_logs
+### Connection Logs Table
 
 ```sql
 CREATE TABLE IF NOT EXISTS oracle_connection_logs (
@@ -227,7 +236,7 @@ CREATE TABLE IF NOT EXISTS oracle_connection_logs (
 );
 ```
 
-### oracle_audit_logs
+### Audit Logs Table
 
 ```sql
 CREATE TABLE IF NOT EXISTS oracle_audit_logs (
@@ -268,11 +277,17 @@ CREATE INDEX IF NOT EXISTS idx_oracle_audit_cluster_time
 ON oracle_audit_logs (cluster_name, log_time DESC);
 ```
 
-## Unique Indexes for Duplicate Prevention
+## Recommended Unique Indexes
 
-The collector uses `ON CONFLICT DO NOTHING`. To make this effective, create unique indexes.
+The collector inserts records with:
 
-### oracle_connection_logs Unique Index
+```sql
+ON CONFLICT DO NOTHING
+```
+
+Create unique indexes to make duplicate prevention effective.
+
+### Connection Logs Unique Index
 
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS uq_oracle_connection_logs_dedup
@@ -290,7 +305,7 @@ ON oracle_connection_logs (
 );
 ```
 
-### oracle_audit_logs Unique Index
+### Audit Logs Unique Index
 
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS uq_oracle_audit_logs_dedup
@@ -311,23 +326,42 @@ ON oracle_audit_logs (
 );
 ```
 
-## Oracle 21c Audit Configuration
+## Start the Containers
 
-Connect to Oracle as SYSDBA:
+Build and start the Oracle 21c database and collector:
+
+```bash
+docker compose up -d --build
+```
+
+Check running containers:
+
+```bash
+docker ps
+```
+
+Follow Oracle logs:
+
+```bash
+docker logs -f oracle21c-db
+```
+
+Follow collector logs:
+
+```bash
+docker logs -f oracle21c-audit-file-collector
+```
+
+## Oracle 21c Audit Setup
+
+Connect to the Oracle container:
 
 ```bash
 docker exec -it oracle21c-db bash
 sqlplus / as sysdba
 ```
 
-Set XML extended auditing:
-
-```sql
-ALTER SYSTEM SET audit_trail='XML, EXTENDED' SCOPE=SPFILE;
-ALTER SYSTEM SET audit_file_dest='<ORACLE_AUDIT_DIRECTORY_IN_ORACLE_CONTAINER>' SCOPE=SPFILE;
-```
-
-Example:
+Enable XML extended auditing:
 
 ```sql
 ALTER SYSTEM SET audit_trail='XML, EXTENDED' SCOPE=SPFILE;
@@ -340,26 +374,40 @@ Restart Oracle after changing `audit_trail`:
 docker restart oracle21c-db
 ```
 
-Verify the settings:
+Reconnect and verify:
+
+```bash
+docker exec -it oracle21c-db bash
+sqlplus / as sysdba
+```
 
 ```sql
 SHOW PARAMETER audit_trail;
 SHOW PARAMETER audit_file_dest;
 ```
 
-Expected result:
+Expected values:
 
 ```text
 audit_trail      XML, EXTENDED
-audit_file_dest  <ORACLE_AUDIT_DIRECTORY_IN_ORACLE_CONTAINER>
+audit_file_dest  /opt/oracle/audit
 ```
 
-## Enable Oracle Auditing for a User
+## Enable Auditing for an Oracle User
 
-Switch to the target PDB:
+Connect to the target PDB:
 
 ```sql
 ALTER SESSION SET CONTAINER=<PDB_NAME>;
+```
+
+Create a test user if needed:
+
+```sql
+CREATE USER <ORACLE_USERNAME> IDENTIFIED BY <ORACLE_PASSWORD>;
+GRANT CREATE SESSION TO <ORACLE_USERNAME>;
+GRANT CREATE TABLE TO <ORACLE_USERNAME>;
+GRANT UNLIMITED TABLESPACE TO <ORACLE_USERNAME>;
 ```
 
 Enable session auditing:
@@ -385,152 +433,12 @@ AUDIT ALTER TABLE BY <ORACLE_USERNAME> BY ACCESS;
 AUDIT DROP TABLE BY <ORACLE_USERNAME> BY ACCESS;
 ```
 
-Example with placeholders:
+## Generate Test Audit Records
 
-```sql
-ALTER SESSION SET CONTAINER=<PDB_NAME>;
-
-AUDIT SESSION BY <APP_USER> BY ACCESS;
-
-AUDIT SELECT TABLE BY <APP_USER> BY ACCESS;
-AUDIT INSERT TABLE BY <APP_USER> BY ACCESS;
-AUDIT UPDATE TABLE BY <APP_USER> BY ACCESS;
-AUDIT DELETE TABLE BY <APP_USER> BY ACCESS;
-
-AUDIT CREATE TABLE BY <APP_USER> BY ACCESS;
-AUDIT ALTER TABLE BY <APP_USER> BY ACCESS;
-AUDIT DROP TABLE BY <APP_USER> BY ACCESS;
-```
-
-## Running the Project
-
-After updating the existing `config.toml` and `docker-compose.yml` files, start the project from the repository root:
+Connect as the audited user:
 
 ```bash
-docker compose up -d --build
-```
-
-Check containers:
-
-```bash
-docker ps
-```
-
-Follow collector logs:
-
-```bash
-docker logs -f oracle21c-audit-logger
-```
-
-Expected collector output:
-
-```text
-Oracle 21c XML audit logger started.
-[<CLUSTER_NAME> / <ORACLE_SERVER_NAME>] Oracle XML audit: <N> new audit records, <N> new connection records
-```
-
-## Running the Collector Manually
-
-If Oracle and PostgreSQL are already running, the collector can be built and run manually.
-
-Build:
-
-```bash
-cd oracle_audit_file_collector
-docker build -t oracle-audit-file-collector:latest .
-```
-
-Run:
-
-```bash
-docker run -d \
-  --name oracle21c-audit-logger \
-  --network host \
-  -e POSTGRES_DB_URL="postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@<POSTGRES_HOST>:<POSTGRES_PORT>/<POSTGRES_DATABASE>" \
-  -v "$(pwd)/config.toml:/app/config.toml:ro" \
-  -v "$(pwd)/offsets:/app/offsets" \
-  -v "<HOST_ORACLE_AUDIT_DIRECTORY>:/oracle-audit:ro" \
-  oracle-audit-file-collector:latest
-```
-
-## Offset Files
-
-The collector stores file offsets in the directory configured by `sincedb_dir`.
-
-Default value:
-
-```toml
-sincedb_dir = "/app/offsets"
-```
-
-This directory is mounted from the host:
-
-```yaml
-- ./oracle_audit_file_collector/offsets:/app/offsets
-```
-
-To reprocess all XML files, stop the collector and delete the offset files:
-
-```bash
-docker rm -f oracle21c-audit-logger
-rm -f oracle_audit_file_collector/offsets/*.offset
-```
-
-Then start the collector again.
-
-## Supported Oracle Action Codes
-
-The collector maps Oracle XML audit action codes to action names.
-
-| Action Code | Action Name |
-|---:|---|
-| `100` | `LOGON` |
-| `101` | `LOGOFF` |
-| `1` | `CREATE TABLE` |
-| `2` | `INSERT` |
-| `3` | `SELECT` |
-| `6` | `UPDATE` |
-| `7` | `DELETE` |
-| `12` | `DROP TABLE` |
-| `15` | `ALTER TABLE` |
-
-`LOGON` and `LOGOFF` are inserted into `oracle_connection_logs`.
-
-Other non-filtered actions are inserted into `oracle_audit_logs`.
-
-## Built-in Filtering
-
-The collector skips noisy or unnecessary records such as:
-
-- Records without timestamp
-- Empty database users
-- `SYS` user records
-- Unknown action records
-- Oracle system schema records
-- Common Oracle metadata queries
-- Common DBeaver metadata queries
-
-Examples of filtered patterns:
-
-```text
-ALL_CONSTRAINTS
-ALL_CONS_COLUMNS
-ALL_INDEXES
-ALL_IND_COLUMNS
-ALL_TAB_COLS
-ALL_TABLES
-USER_OBJECTS
-DBA_POLICIES
-XS_SYS_CONTEXT
-SYS.DUAL
-```
-
-## Test Queries
-
-Connect as the audited Oracle user:
-
-```bash
-sqlplus <ORACLE_USERNAME>/<ORACLE_PASSWORD>@<ORACLE_HOST>:<ORACLE_PORT>/<PDB_NAME>
+sqlplus <ORACLE_USERNAME>/<ORACLE_PASSWORD>@localhost:1522/<PDB_NAME>
 ```
 
 Run test SQL:
@@ -558,7 +466,23 @@ ADD description VARCHAR2(200);
 DROP TABLE <TEST_TABLE_NAME>;
 ```
 
-Check audit logs in PostgreSQL:
+## Check XML Audit Files
+
+Check whether XML audit files are generated on the host:
+
+```bash
+find oracle21c-audit -type f -name "*.xml" | tail -n 20
+```
+
+Check whether SQL text exists in audit files:
+
+```bash
+grep -R "Sql_Text\|SELECT\|INSERT\|UPDATE\|DELETE\|CREATE TABLE\|ALTER TABLE\|DROP TABLE" oracle21c-audit | tail -n 100
+```
+
+## Check PostgreSQL Output
+
+Audit logs:
 
 ```sql
 SELECT
@@ -576,7 +500,7 @@ ORDER BY log_time DESC
 LIMIT 20;
 ```
 
-Check connection logs in PostgreSQL:
+Connection logs:
 
 ```sql
 SELECT
@@ -594,43 +518,96 @@ ORDER BY log_time DESC
 LIMIT 20;
 ```
 
-## Checking XML Audit Files
+## Supported Action Mapping
 
-Check whether Oracle XML audit files are being created:
+| Oracle Action Code | Action Name |
+|---:|---|
+| `100` | `LOGON` |
+| `101` | `LOGOFF` |
+| `1` | `CREATE TABLE` |
+| `2` | `INSERT` |
+| `3` | `SELECT` |
+| `6` | `UPDATE` |
+| `7` | `DELETE` |
+| `12` | `DROP TABLE` |
+| `15` | `ALTER TABLE` |
 
-```bash
-find <HOST_ORACLE_AUDIT_DIRECTORY> -type f -name "*.xml" | tail -n 20
+`LOGON` and `LOGOFF` records are written into `oracle_connection_logs`.
+
+All other supported non-filtered actions are written into `oracle_audit_logs`.
+
+## Built-in Filtering
+
+The collector skips common noisy records, including:
+
+- Records without timestamp
+- Empty database user records
+- `SYS` user records
+- Unknown actions
+- Oracle system metadata queries
+- DBeaver metadata queries
+- Queries against `SYS` schema objects
+
+Examples of filtered metadata patterns:
+
+```text
+ALL_CONSTRAINTS
+ALL_INDEXES
+ALL_TAB_COLS
+USER_OBJECTS
+DBA_POLICIES
+SYS.DUAL
 ```
 
-Search for SQL text inside audit files:
+## Offset Handling
+
+The collector stores processed file sizes under:
+
+```text
+offsets/
+```
+
+Inside the container, this directory is mounted as:
+
+```text
+/app/offsets
+```
+
+To reprocess all XML audit files from the beginning:
 
 ```bash
-grep -R "Sql_Text\|SELECT\|INSERT\|UPDATE\|DELETE\|CREATE TABLE\|ALTER TABLE\|DROP TABLE" <HOST_ORACLE_AUDIT_DIRECTORY> | tail -n 100
+docker stop oracle21c-audit-file-collector
+rm -f offsets/*.offset
+docker start oracle21c-audit-file-collector
 ```
 
 ## Troubleshooting
 
-### XML audit files are not created
+### XML files are not generated
 
-Check Oracle parameters:
+Check Oracle audit parameters:
 
 ```sql
 SHOW PARAMETER audit_trail;
 SHOW PARAMETER audit_file_dest;
 ```
 
-Expected values:
+Expected:
 
 ```text
 audit_trail      XML, EXTENDED
-audit_file_dest  <ORACLE_AUDIT_DIRECTORY_IN_ORACLE_CONTAINER>
+audit_file_dest  /opt/oracle/audit
 ```
 
-If `audit_trail` was changed with `SCOPE=SPFILE`, restart Oracle.
+If `audit_trail` was changed, restart Oracle:
 
-### SQL text is missing from XML files
+```bash
+docker restart oracle21c-db
+```
 
-Make sure auditing is configured as XML extended:
+### SQL text is missing in XML files
+
+Make sure XML extended auditing is enabled:
 
 ```sql
 ALTER SYSTEM SET audit_trail='XML, EXTENDED' SCOPE=SPFILE;
@@ -640,49 +617,92 @@ Then restart Oracle.
 
 ### Collector cannot connect to PostgreSQL
 
-Check `POSTGRES_DB_URL`:
-
-```bash
-echo $POSTGRES_DB_URL
-```
-
-Expected format:
+Check `POSTGRES_DB_URL` in `docker-compose.yml`:
 
 ```text
 postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@<POSTGRES_HOST>:<POSTGRES_PORT>/<POSTGRES_DATABASE>
 ```
 
-If the collector runs with `network_mode: host`, `localhost` points to the host network namespace.
+If PostgreSQL runs on the Docker host and the collector uses `network_mode: host`, `localhost` can be used as the PostgreSQL host on Linux.
 
-### Permission denied while reading audit files
+### Permission denied on Oracle data or audit folders
 
-Make sure the Oracle audit directory is mounted into the collector container as read-only:
+For local testing:
 
-```yaml
-- ./oracle21c-audit:/oracle-audit:ro
+```bash
+chmod -R 777 oracle21c-data oracle21c-audit offsets
 ```
 
-Also make sure the files are readable on the host.
+For production, set the correct ownership for the Oracle container user instead.
 
-### Duplicate records are inserted
+### Duplicate records
 
 Check the following:
 
-- Unique indexes exist in PostgreSQL.
-- Offset files are mounted persistently.
-- The same audit path is not configured more than once with the same source metadata.
-- Offset files were not deleted while the collector was running.
+- Offset files are mounted persistently
+- Unique indexes were created in PostgreSQL
+- The same audit directory is not configured more than once with the same metadata
+
+## Clean Restart
+
+Stop and remove containers:
+
+```bash
+docker compose down
+```
+
+Remove collector offsets only:
+
+```bash
+rm -f offsets/*.offset
+```
+
+Remove Oracle database files and audit files for a full local reset:
+
+```bash
+sudo rm -rf oracle21c-data/* oracle21c-audit/* offsets/*
+touch oracle21c-data/.gitkeep oracle21c-audit/.gitkeep offsets/.gitkeep
+```
+
+Start again:
+
+```bash
+docker compose up -d --build
+```
+
+## Git Ignore Policy
+
+The repository keeps empty working directories with `.gitkeep`, but ignores generated runtime data.
+
+Tracked:
+
+```text
+oracle21c-data/.gitkeep
+oracle21c-audit/.gitkeep
+offsets/.gitkeep
+```
+
+Ignored:
+
+```text
+oracle21c-data/*
+oracle21c-audit/*
+offsets/*
+target/
+.env
+*.log
+```
 
 ## Security Notes
 
 - Do not commit real passwords.
-- Do not commit real IP addresses if the repository is public.
-- Keep `POSTGRES_DB_URL` values environment-specific.
+- Replace placeholder credentials before running.
+- Use a restricted PostgreSQL user in production.
 - Mount audit files as read-only in the collector container.
-- Use a PostgreSQL user with only the required table permissions in production.
+- Do not commit Oracle data files, XML audit files, or offset files.
 
-## Notes About Oracle Versions
+## Notes
 
-This collector targets Oracle 21c XML extended auditing.
-
-Oracle 26ai may behave differently because unified auditing is the preferred audit architecture in newer Oracle versions. For this reason, Oracle 21c was selected for this file-based XML audit collector.
+- This collector targets Oracle 21c XML extended audit files.
+- Oracle 21c was selected as the supported version for this file-based XML collector.
+- Oracle 26ai may require a Unified Auditing based collector instead of this XML file-based approach.
